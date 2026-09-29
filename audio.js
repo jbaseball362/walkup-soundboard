@@ -9,7 +9,10 @@
      suspicious sign is reported as 'trouble' so the app can show TAP TO RE-ARM. */
 const AudioEngine = (() => {
   'use strict';
-  const LRU_SIZE = 4, RESUME_TIMEOUT_MS = 1000, VERIFY_MS = 300, FADE_S = 2, STOP_S = 0.05;
+  const LRU_SIZE = 4, RESUME_TIMEOUT_MS = 3000, VERIFY_MS = 1500, FADE_S = 2, STOP_S = 0.05;
+  // Bluetooth can take a second or more to start rendering, and each new context starts it again, so the
+  // checks wait and double-check (a too-eager check made every Re-arm fail the same way: a loop).
+  const STARTUP = new Set(['audio did not start', 'audio did not resume', 'audio clock is stuck']);
   const AC = window.AudioContext || window.webkitAudioContext;
 
   let ctx = null, gen = 0;          // gen changes with every new context (stale decodes are dropped)
@@ -20,7 +23,7 @@ const AudioEngine = (() => {
   const lru = new Map();            // path -> AudioBuffer, least recently used first
   const inflight = new Map();       // path -> Promise<AudioBuffer>
   let clip = null;                  // the one playing clip
-  const listeners = { trouble: [], change: [] };
+  const listeners = { trouble: [], change: [], healed: [] };
 
   const emit = (type, arg) => listeners[type].forEach(fn => { try { fn(arg); } catch (e) { console.error(e); } });
   const on = (type, fn) => listeners[type].push(fn);
@@ -31,10 +34,32 @@ const AudioEngine = (() => {
   }
   session();
 
+  const log = [];                    // recent trouble, shown in Diagnostics
   function flag(reason) {
     trouble = reason;
+    log.push({ at: new Date().toLocaleTimeString(), reason, state: ctx ? ctx.state : 'none',
+               session: navigator.audioSession ? navigator.audioSession.state : 'n/a' });
+    if (log.length > 20) log.shift();
     emit('trouble', reason);
     emit('change');
+  }
+  function heal() {                  // a late start is not a dead context: clear startup trouble
+    if (trouble && STARTUP.has(trouble) && ctx && ctx.state === 'running') {
+      trouble = '';
+      emit('healed');
+      emit('change');
+    }
+  }
+  // "Clock stuck" only if it has not moved at the first look AND still has not moved a bit later.
+  function verifyClock(ac, stillRelevant) {
+    const t0 = ac.currentTime;
+    setTimeout(() => {
+      if (!stillRelevant() || ac !== ctx || ac.currentTime > t0 + 0.05) return;
+      const t1 = ac.currentTime;
+      setTimeout(() => {
+        if (stillRelevant() && ac === ctx && ac.currentTime <= t1 + 0.05) flag('audio clock is stuck');
+      }, VERIFY_MS);
+    }, VERIFY_MS);
   }
 
   // Kick off resume() synchronously; the promise says whether it is running within 1 s.
@@ -67,7 +92,7 @@ const AudioEngine = (() => {
     trouble = '';
     const g = gen;
     ready = resume();
-    ready.then(ok => { if (!ok && g === gen) flag('audio did not start'); });
+    ready.then(ok => { if (!ok && g === gen && ctx && ctx.state !== 'running') flag('audio did not start'); });
     if (midway) midway();
     if (old && old !== ctx) {
       stopNow('rearm');                       // its clip dies with the old context
@@ -80,7 +105,7 @@ const AudioEngine = (() => {
 
   function onState(c) {
     if (c !== ctx) return;
-    if (c.state === 'running') wasRunning = true;
+    if (c.state === 'running') { wasRunning = true; heal(); }
     else if (wasRunning) flag('audio ' + c.state);          // suspended / interrupted / closed
     emit('change');
   }
@@ -178,7 +203,7 @@ const AudioEngine = (() => {
     stopNow('replaced');                       // one sound at a time
     const c = { path, onDone, src: null, gain: null, done: false, reason: '', safety: 0 };
     clip = c;
-    running.then(ok => { if (!ok && clip === c) flag('audio did not resume'); });
+    running.then(ok => { if (!ok && clip === c && ctx && ctx.state !== 'running') flag('audio did not resume'); });
     const start = buf => {
       if (clip !== c || c.done) return;        // stopped or re-armed while decoding
       const ac = ctx, src = ac.createBufferSource(), gain = ac.createGain();
@@ -189,8 +214,7 @@ const AudioEngine = (() => {
       src.start();
       c.src = src; c.gain = gain;
       // A context that says "running" but whose clock does not move is not making sound.
-      const t0 = ac.currentTime;
-      setTimeout(() => { if (clip === c && ac === ctx && ac.currentTime <= t0 + 0.01) flag('audio clock is stuck'); }, VERIFY_MS);
+      verifyClock(ac, () => clip === c);
       c.safety = setTimeout(() => finish(c, c.reason || 'ended'), (buf.duration + 1.5) * 1000);   // if onended never fires
       emit('change');
     };
@@ -239,8 +263,7 @@ const AudioEngine = (() => {
       o.start(t + dt);
       o.stop(t + dt + 0.45);
     });
-    const t0 = ac.currentTime;
-    setTimeout(() => { if (ac === ctx && ac.currentTime <= t0 + 0.01) flag('audio clock is stuck'); }, VERIFY_MS);
+    // No clock check here: the Sound Check asks the parent whether it was heard.
   }
 
   function info() {
@@ -254,6 +277,7 @@ const AudioEngine = (() => {
       decoded: [...lru.keys()].length,
       clips: bytes.size,
       trouble,
+      log: log.slice().reverse(),
     };
   }
 
@@ -265,5 +289,7 @@ const AudioEngine = (() => {
     ready: () => ready,
     hasBytes: () => bytes.size > 0,
     playing: () => !!clip,
+    // Test hook for this PC only (the live site ignores it): simulate an iOS audio failure.
+    debugFlag: reason => { if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) flag(reason); },
   };
 })();

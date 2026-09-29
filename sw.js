@@ -3,7 +3,7 @@
    PINNED version, so a deploy never changes the phone by itself (not even on a cold launch):
    only Update in settings re-pins, and Roll back re-pins the previous version, offline.
    Bump VERSION (and APP_VERSION in app.js) for every deploy; keep this file small and stable. */
-const VERSION = '2026.09.29-2';
+const VERSION = '2026.09.29-3';
 const SHELL = ['./', 'styles.css', 'app.js', 'audio.js', 'store.js', 'zip.js', 'manifest.webmanifest',
   'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 const META = 'walkup-meta', PIN_KEY = './__pinned', LIST_KEY = './__versions';

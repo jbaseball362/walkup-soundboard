@@ -6,7 +6,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2026.09.29-2';        // keep equal to VERSION in sw.js
+  const APP_VERSION = '2026.09.29-3';        // keep equal to VERSION in sw.js
   const DEBOUNCE_MS = 400, FADE_LOCK_MS = 3000, COOLDOWN_MS = 2000, LOCK_HOLD_MS = 1500,
         LONG_PRESS_MS = 550, RESUME_WINDOW_MS = 6 * 3600 * 1000, STATE_KEY = 'walkup.game.v1';
   const MODES = ['full', 'intro_only', 'silent'];
@@ -56,6 +56,7 @@
   let fading = false, stopEarly = false, playAt = 0, lastTap = 0, lastStop = 0, coolUntil = 0, coolTimer = 0, tickTimer = 0, playSeq = 0;
   let locked = false, tapIn = false, importing = false;
   let armedAt = 0, soundOkAt = 0, armSeq = 0;
+  const rearms = [];                         // recent Re-arm taps, to spot a Re-arm that isn't helping
   let swStatus = null, swError = '';
   let sheetKind = '', sheetModal = false, sheetAt = 0, shownCur = null, toastTimer = 0;
 
@@ -355,7 +356,10 @@
     $('trouble-banner').textContent = `Sound may be off (${why}). Silent? Tap STOP, then RE-ARM.`;
     $('trouble-banner').hidden = !(on && playing);
     if (on && !playing) {
-      $('rearm-why').textContent = `Sound may be off (${why}). One tap fixes it.`;
+      const now = Date.now(), recent = rearms.filter(t => now - t < 60000).length;
+      $('rearm-why').textContent = recent >= 2
+        ? `Re-arm isn't fixing it (${why}). Swipe the app closed and reopen it, or use VLC for now.`
+        : `Sound may be off (${why}). One tap fixes it.`;
       $('rearm').hidden = false;
     }
   }
@@ -835,6 +839,7 @@
       ['Audio', `${a.state}${a.sampleRate ? ` · ${a.sampleRate} Hz` : ''} · latency ${a.latency} · clock ${a.clock}`],
       ['Audio session', a.session],
       ['Interruption', a.trouble || 'none'],
+      ['Recent audio trouble', a.log.length ? a.log.slice(0, 6).map(e => `${e.at} ${e.reason} (${e.state}, session ${e.session})`).join(' · ') : 'none'],
       ['Wake lock', !wake.supported ? 'not supported here (set Auto-Lock to Never)' : wake.held() ? 'held' : `not held${wake.error ? ` (${wake.error})` : ''}`],
       ['Sound Check', armedAt && soundOkAt >= armedAt ? `confirmed ${time(soundOkAt)}` : S.soundCheckAt ? `not since arming (last ${time(S.soundCheckAt)})` : 'not yet'],
       ['Home Screen app', standalone ? 'yes' : 'no (browser tab)'],
@@ -884,7 +889,10 @@
       if (row.dataset.absent) openMenu(id); else queueBatter(id);
     }, openMenu);
 
-    $('btn-rearm').addEventListener('click', () => { armNow(true); afterArm(); });
+    $('btn-rearm').addEventListener('click', () => { rearms.push(Date.now()); if (rearms.length > 5) rearms.shift(); armNow(true); afterArm(); });
+    $('btn-rearm-details').addEventListener('click', () => { $('rearm').hidden = true; openDiagnostics(); });
+    $('btn-rearm-hide').addEventListener('click', () => { $('rearm').hidden = true; updatePill(); });
+    audio.on('healed', () => { $('rearm').hidden = $('trouble-banner').hidden = true; updatePill(); });
     $('sheet').addEventListener('click', e => {
       // A long-press can end with a stray click on the sheet that just opened under the finger.
       if (performance.now() - sheetAt < 450) { e.stopPropagation(); e.preventDefault(); return; }
