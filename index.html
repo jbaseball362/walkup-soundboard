@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Walk-Up">
+<meta name="theme-color" content="#111111">
+<meta name="format-detection" content="telephone=no">
+<meta name="robots" content="noindex">
+<title>Walk-Up Soundboard</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="stylesheet" href="styles.css">
+<script src="zip.js" defer></script>
+<script src="store.js" defer></script>
+<script src="audio.js" defer></script>
+<script src="app.js" defer></script>
+</head>
+<body>
+<!-- Everything below is a generic shell: names, numbers and audio come only from the team pack
+     imported on the phone and never leave it. -->
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-gear" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="3">
+    <circle cx="12" cy="12" r="8.5" stroke-dasharray="3.4 3.28"/><circle cx="12" cy="12" r="5.5"/></g></symbol>
+</svg>
+
+<!-- Team pack -->
+<section id="scr-pack" class="screen" hidden>
+  <header class="bar">
+    <h1>Walk-Up Soundboard</h1>
+    <button class="icon-btn" data-act="settings" aria-label="Settings"><svg><use href="#i-gear"/></svg></button>
+  </header>
+  <main class="scroll pad">
+    <div class="card">
+      <h2>Team pack</h2>
+      <p id="pack-status" class="lead">No team pack on this phone yet.</p>
+      <label class="btn big primary file-btn" id="import-a"><span id="import-label">Import team pack</span>
+        <input type="file" id="file-a" accept=".walkup,.zip,application/zip,application/x-zip-compressed,application/octet-stream">
+      </label>
+      <label class="linkish file-btn" id="import-b">File greyed out? Pick it here instead
+        <input type="file" id="file-b">
+      </label>
+      <button id="btn-local" class="btn big" hidden>Load pack from this PC</button>
+      <p id="import-progress" class="progress" hidden></p>
+      <p id="import-error" class="error" role="alert" hidden></p>
+      <p id="import-ok" class="okmsg" hidden></p>
+    </div>
+    <div class="card" id="pack-players" hidden>
+      <h2>Players in this pack</h2>
+      <ol id="pack-list" class="plain-list"></ol>
+    </div>
+    <p class="note">The pack stays on this phone. Nothing is uploaded.</p>
+    <p class="note" id="offline-line"></p>
+  </main>
+  <footer class="dock">
+    <button id="btn-to-roll" class="btn huge primary" hidden>Batting order</button>
+    <div class="dead"></div>
+  </footer>
+</section>
+
+<!-- Roll call -->
+<section id="scr-roll" class="screen" hidden>
+  <header class="bar">
+    <button class="bar-btn" id="btn-to-pack">Pack</button>
+    <h1>Batting order</h1>
+    <button class="icon-btn" data-act="settings" aria-label="Settings"><svg><use href="#i-gear"/></svg></button>
+  </header>
+  <main class="scroll pad">
+    <p id="roll-summary" class="sub"></p>
+    <div class="tools">
+      <button id="btn-tapin" class="btn">Tap in batting order</button>
+      <button id="btn-last" class="btn">Use last order</button>
+      <button id="btn-clear" class="btn">Clear</button>
+    </div>
+    <div id="tapin-banner" class="banner" hidden>
+      <span>Tap names in the order the coach reads them.</span>
+      <button id="btn-tapdone" class="btn small">Done</button>
+    </div>
+    <ol id="roll-order" class="roll"></ol>
+    <h3 class="section-h"><b id="absent-title">Absent</b> <span id="absent-hint">tap a name to add her to the end</span></h3>
+    <ul id="roll-absent" class="roll absent"></ul>
+  </main>
+  <footer class="dock">
+    <button id="btn-start" class="btn huge primary">Start game</button>
+    <div class="dead"></div>
+  </footer>
+</section>
+
+<!-- Game -->
+<section id="scr-game" class="screen game" hidden>
+  <header class="gbar">
+    <button id="pill" class="pill check" aria-label="Status and diagnostics">CHECK</button>
+    <span class="grow"></span>
+    <button id="btn-back" class="tb">BACK</button>
+    <button id="btn-skip" class="tb">SKIP</button>
+    <button id="btn-lock" class="tb lock" aria-label="Hold to lock">LOCK</button>
+    <button class="tb icon-btn" data-act="settings" aria-label="Settings"><svg><use href="#i-gear"/></svg></button>
+  </header>
+  <div class="now">
+    <div class="atbat">
+      <div class="lbl">AT BAT</div>
+      <div class="ab-line"><span id="ab-name" class="ab-name"></span> <span id="ab-num" class="ab-num"></span></div>
+      <div id="ab-song" class="ab-song"></div>
+    </div>
+    <div class="deck">
+      <div><span class="lbl">ON DECK</span><b id="on-deck"></b></div>
+      <div><span class="lbl">IN THE HOLE</span><b id="in-hole"></b></div>
+    </div>
+  </div>
+  <ol id="lineup" class="lineup"></ol>
+  <footer class="controls">
+    <p id="trouble-banner" class="trouble" role="alert" hidden></p>
+    <button id="btn-play" class="play"></button>
+    <button id="btn-stop" class="stop">STOP</button>
+    <div class="dead"></div>
+  </footer>
+</section>
+
+<!-- Bottom sheet (sound check, resume, settings, diagnostics, player menu) -->
+<div id="sheet" class="sheet-wrap" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" id="sheet-body"></div>
+</div>
+
+<!-- Audio trouble: covers everything (but never a playing clip: see showTrouble), one tap re-arms -->
+<div id="rearm" class="rearm" hidden>
+  <button id="btn-rearm"><span>TAP TO <b>RE-ARM</b></span><small id="rearm-why"></small></button>
+</div>
+
+<div id="toast" class="toast" role="status" hidden></div>
+
+<noscript><p class="pad">This app needs JavaScript.</p></noscript>
+</body>
+</html>

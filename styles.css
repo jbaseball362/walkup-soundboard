@@ -1,0 +1,212 @@
+/* High contrast for sunlight: black header, red primary, white background, big type.
+   Portrait phone first (393x852); on a desktop the app sits in a centered phone-width column. */
+:root {
+  --red: #c8102e; --red-press: #9e0c24; --black: #111111; --white: #fff;
+  --ink: #111111; --muted: #3d3d42; --line: #c9c9cf; --soft: #f1f1f3; --soft2: #e4e4e8;
+  --ok: #0f7a36; --warn: #f2b100; --grey: #5c5c63;
+  --safe-t: env(safe-area-inset-top, 0px); --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px); --safe-r: env(safe-area-inset-right, 0px);
+  --col: 600px;
+  color-scheme: light;
+}
+[hidden] { display: none !important }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent }
+html { touch-action: manipulation; -webkit-text-size-adjust: 100% }
+html, body { margin: 0; height: 100%; background: var(--black) }
+body {
+  font: 17px/1.35 -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", Roboto, sans-serif;
+  color: var(--ink); overscroll-behavior: none;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+button, input { font: inherit; color: inherit }
+button { cursor: pointer; touch-action: manipulation }
+
+/* ---- screens: one visible at a time, full height, safe areas respected */
+.screen {
+  position: fixed; top: 0; bottom: 0; left: 0; right: 0; margin: 0 auto; max-width: var(--col);
+  display: flex; flex-direction: column; background: var(--white); overflow: hidden;
+  padding-left: var(--safe-l); padding-right: var(--safe-r);
+}
+.scroll { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain }
+.pad { padding: 14px 16px }
+.bar {
+  display: flex; align-items: center; gap: 10px; background: var(--black); color: var(--white);
+  padding: calc(var(--safe-t) + 10px) 12px 10px 16px; border-bottom: 5px solid var(--red); flex: none;
+}
+.bar h1 { flex: 1; margin: 0; font-size: 21px; font-weight: 800; letter-spacing: .2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.bar-btn { background: transparent; color: var(--white); border: 2px solid rgba(255,255,255,.6); border-radius: 10px; min-height: 40px; padding: 0 12px; font-weight: 700 }
+.icon-btn { display: inline-flex; align-items: center; justify-content: center; background: transparent; color: var(--white); border: 0; width: 44px; height: 44px; padding: 0 }
+.icon-btn svg { width: 26px; height: 26px }
+.dock { flex: none; padding: 10px 16px 0; background: var(--white); border-top: 2px solid var(--soft2) }
+.dead { height: calc(var(--safe-b) + 24px) }       /* keep thumbs out of the swipe-home zone */
+
+/* ---- buttons */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; text-align: center;
+  min-height: 52px; padding: 0 16px; border-radius: 12px; border: 2px solid var(--black);
+  background: var(--white); color: var(--black); font-size: 17px; font-weight: 750;
+}
+.btn:active { background: var(--soft2) }
+.btn.primary { background: var(--red); border-color: var(--red); color: var(--white) }
+.btn.primary:active { background: var(--red-press) }
+.btn.dark { background: var(--black); border-color: var(--black); color: var(--white) }
+.btn.big { width: 100%; min-height: 64px; font-size: 21px; margin-top: 12px }
+.btn.huge { width: 100%; min-height: 76px; font-size: 26px; font-weight: 850 }
+.btn.small { min-height: 40px; font-size: 16px; padding: 0 14px }
+.btn:disabled { opacity: .4; cursor: default }
+.file-btn { position: relative; overflow: hidden }
+.file-btn input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer }
+.linkish { display: block; text-align: center; padding: 12px 0 2px; color: var(--black); text-decoration: underline; font-weight: 600; font-size: 16px }
+
+/* ---- pack screen */
+.card { border: 2px solid var(--black); border-radius: 14px; padding: 14px 16px 16px; margin-bottom: 14px }
+.card h2 { margin: 0 0 6px; font-size: 19px; font-weight: 800 }
+.lead { margin: 0; font-size: 18px; font-weight: 600 }
+.note { color: var(--muted); font-size: 15px; margin: 6px 2px }
+.progress { font-weight: 700; margin: 12px 0 0 }
+.error { background: #fde3e1; color: #7d1010; border: 2px solid #b3261e; border-radius: 10px; padding: 10px 12px; font-weight: 650; margin: 12px 0 0; -webkit-user-select: text; user-select: text }
+.okmsg { background: #dcf3e4; color: #0b4d24; border: 2px solid var(--ok); border-radius: 10px; padding: 10px 12px; font-weight: 700; margin: 12px 0 0 }
+.plain-list { margin: 0; padding: 0; list-style: none }
+.plain-list li { display: flex; gap: 10px; align-items: baseline; padding: 8px 0; border-top: 1px solid var(--line) }
+.plain-list li:first-child { border-top: 0 }
+.plain-list .n { width: 28px; color: var(--muted); font-weight: 700; text-align: right; flex: none }
+.plain-list .who { font-weight: 800 }
+.plain-list .what { color: var(--muted); font-size: 15px; flex: 1; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+
+/* ---- roll call */
+.sub { margin: 0 0 10px; color: var(--muted); font-weight: 600 }
+.tools { display: flex; gap: 8px; flex-wrap: wrap }
+.tools .btn { flex: 1 1 auto; min-height: 48px; font-size: 16px; padding: 0 12px }
+.banner { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 10px 12px; background: var(--black); color: var(--white); border-radius: 12px; font-weight: 700 }
+.banner span { flex: 1 }
+.banner .btn { border-color: var(--white) }
+.roll { list-style: none; margin: 12px 0 0; padding: 0 }
+.roll li {
+  display: flex; align-items: center; gap: 12px; min-height: 58px; padding: 6px 12px; margin-bottom: 6px;
+  border: 2px solid var(--black); border-radius: 12px; font-size: 20px; font-weight: 800; cursor: pointer;
+}
+.roll li:active { background: var(--soft2) }
+.roll .n { width: 34px; height: 34px; border-radius: 50%; background: var(--red); color: var(--white); display: inline-flex; align-items: center; justify-content: center; font-size: 17px; flex: none }
+.roll .num { color: var(--red); font-weight: 800 }
+.roll .hint { margin-left: auto; font-size: 14px; font-weight: 600; color: var(--muted) }
+.roll.absent li { border-style: dashed; border-color: var(--grey); color: var(--grey); font-weight: 700 }
+.roll.absent .num { color: var(--grey) }
+.section-h { margin: 18px 0 0; font-size: 17px; font-weight: 800 }
+.section-h span { font-weight: 500; color: var(--muted); font-size: 15px; margin-left: 6px }
+.roll li.empty { border: 0; min-height: 0; padding: 6px 2px; color: var(--muted); font-size: 16px; font-weight: 600; font-style: italic; cursor: default }
+.roll li.empty:active { background: none }
+
+/* ---- game screen */
+.gbar {
+  flex: none; display: flex; align-items: center; gap: 6px; background: var(--black); color: var(--white);
+  padding: calc(var(--safe-t) + 6px) 8px 6px 10px; border-bottom: 4px solid var(--red);
+}
+.grow { flex: 1 }
+.pill { border: 0; border-radius: 999px; padding: 0 14px; min-height: 40px; font-weight: 900; font-size: 15px; letter-spacing: .5px; display: inline-flex; align-items: center; gap: 7px }
+.pill::before { content: ""; width: 11px; height: 11px; border-radius: 50%; background: currentColor }
+.pill.ok { background: var(--ok); color: var(--white) }
+.pill.check { background: var(--warn); color: var(--black) }
+.tb { background: transparent; color: var(--white); border: 2px solid rgba(255,255,255,.55); border-radius: 10px; min-height: 40px; min-width: 44px; padding: 0 9px; font-weight: 800; font-size: 14px; position: relative; overflow: hidden }
+.tb:disabled { opacity: .3 }
+.tb.icon-btn { border: 0; padding: 0 }
+.tb.lock::after { content: ""; position: absolute; left: 0; bottom: 0; height: 4px; width: 0; background: var(--red) }
+.tb.lock.holding::after { width: 100%; transition: width 1.5s linear }
+body.locked .tb.lock { background: var(--red); border-color: var(--red) }
+body.locked .tb.lock::after { background: var(--white) }
+
+.now { flex: none; border-bottom: 3px solid var(--black) }
+.atbat { padding: 8px 16px 8px; background: var(--white) }
+.lbl { font-size: 13px; font-weight: 900; letter-spacing: 1px; color: var(--red) }
+.ab-line { font-size: 40px; font-weight: 900; line-height: 1.05; overflow-wrap: anywhere }
+.ab-line.long { font-size: 32px }
+.ab-num { color: var(--red); white-space: nowrap }
+.ab-song { font-size: 18px; font-weight: 650; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 24px }
+.deck { display: grid; grid-template-columns: 1fr 1fr; border-top: 2px solid var(--soft2) }
+.deck > div { padding: 6px 16px 8px; min-width: 0 }
+.deck > div + div { border-left: 2px solid var(--soft2) }
+.deck b { display: block; font-size: 19px; font-weight: 850; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.deck .lbl { color: var(--muted); font-size: 12px }
+
+.lineup { position: relative; flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; margin: 0; padding: 4px 0; list-style: none; background: var(--soft); touch-action: pan-y }
+.lineup li { display: flex; align-items: center; gap: 12px; min-height: 50px; padding: 4px 16px; border-bottom: 1px solid var(--line); background: var(--white); font-size: 19px; font-weight: 750; cursor: pointer }
+.lineup li .n { width: 28px; text-align: right; color: var(--muted); font-weight: 800; flex: none }
+.lineup li .num { color: var(--red); font-weight: 800 }
+.lineup li .tag { margin-left: auto; font-size: 12px; font-weight: 900; letter-spacing: .6px; padding: 3px 8px; border-radius: 6px; background: var(--black); color: var(--white) }
+.lineup li.cur { background: var(--red); color: var(--white) }
+.lineup li.cur .n, .lineup li.cur .num { color: var(--white) }
+.lineup li.cur .tag { background: var(--white); color: var(--red) }
+.lineup li.pressing { background: var(--soft2) }
+.lineup li.out { color: var(--grey); font-weight: 600; background: var(--soft) }
+.lineup li.out .num { color: var(--grey) }
+.lineup .divider { min-height: 0; padding: 10px 16px 4px; font-size: 13px; font-weight: 900; letter-spacing: 1px; color: var(--muted); background: var(--soft); border: 0; cursor: default }
+body.locked .lineup li { cursor: default }
+
+.controls { flex: none; padding: 10px 12px 0; background: var(--white); border-top: 3px solid var(--black) }
+.play {
+  width: 100%; min-height: 148px; border: 0; border-radius: 20px; padding: 10px 14px;
+  background: var(--red); color: var(--white); font-weight: 900; line-height: 1.05;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+}
+.play:active { background: var(--red-press) }
+.play .verb { font-size: 26px; letter-spacing: 2px }
+.play .who { font-size: 38px; overflow-wrap: anywhere }
+.play.long .who { font-size: 30px }
+.play .small { font-size: 16px; font-weight: 700; letter-spacing: .3px; opacity: .95 }
+.play.fade { background: var(--black) }
+.play.fade .verb { font-size: 46px; letter-spacing: 4px }
+.play.wait { background: var(--grey) }
+.play.cool { background: var(--soft2); color: var(--black) }
+.play.silent { background: var(--black) }
+.play.silent .who { font-size: 26px }
+.play.none { background: var(--soft2); color: var(--muted) }
+.stop {
+  width: 100%; min-height: 64px; margin-top: 10px; border-radius: 16px; border: 3px solid var(--black);
+  background: var(--white); color: var(--black); font-size: 26px; font-weight: 900; letter-spacing: 3px;
+}
+.stop:active { background: var(--soft2) }
+.stop.idle { opacity: .35 }
+.trouble { margin: 0 0 8px; padding: 8px 12px; border-radius: 12px; background: var(--red); color: var(--white); font-size: 16px; font-weight: 800; text-align: center; pointer-events: none }
+
+/* ---- sheet, overlay, toast */
+.sheet-wrap { position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.6); display: flex; align-items: flex-end; justify-content: center }
+.sheet {
+  width: 100%; max-width: var(--col); max-height: 88%; overflow-y: auto; background: var(--white);
+  border-radius: 18px 18px 0 0; padding: 18px 16px calc(var(--safe-b) + 24px); border-top: 5px solid var(--red);
+}
+.sheet h2 { margin: 0 0 8px; font-size: 24px; font-weight: 900 }
+.sheet h3 { margin: 18px 0 6px; font-size: 16px; font-weight: 900; letter-spacing: .5px; text-transform: uppercase; color: var(--muted) }
+.sheet p { margin: 6px 0 }
+.sheet .btn { width: 100%; margin-top: 10px }
+.sheet .row2 { display: flex; gap: 10px }
+.sheet .row2 .btn { flex: 1; font-size: 22px; padding: 0 10px }
+.sheet .big-name { font-size: 30px; font-weight: 900 }
+.kv { width: 100%; border-collapse: collapse; font-size: 15px; -webkit-user-select: text; user-select: text }
+.kv th { text-align: left; color: var(--muted); font-weight: 700; padding: 5px 10px 5px 0; vertical-align: top; white-space: nowrap }
+.kv td { padding: 5px 0; font-weight: 650; overflow-wrap: anywhere }
+.issues { margin: 6px 0 0; padding-left: 20px; font-weight: 700; color: #7a4d00 }
+.good { color: var(--ok); font-weight: 800 }
+
+.rearm { position: fixed; inset: 0; z-index: 60; background: var(--red) }
+.rearm button {
+  width: 100%; height: 100%; border: 0; background: transparent; color: var(--white);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  padding: calc(var(--safe-t) + 20px) 24px calc(var(--safe-b) + 20px);
+}
+.rearm span { font-size: 46px; font-weight: 900; line-height: 1.05; letter-spacing: 1px; text-align: center }
+.rearm b { white-space: nowrap; font-weight: 900 }
+.rearm small { font-size: 18px; font-weight: 700; opacity: .95 }
+.toast {
+  position: fixed; left: 50%; transform: translateX(-50%); top: calc(var(--safe-t) + 70px); z-index: 70;
+  max-width: min(92vw, 560px); background: var(--black); color: var(--white); border: 2px solid var(--white);
+  padding: 12px 16px; border-radius: 12px; font-weight: 700; box-shadow: 0 6px 20px rgba(0,0,0,.35);
+}
+
+/* Short screens (landscape phone, small laptop window): shrink the fixed parts, keep PLAY big. */
+@media (max-height: 700px) {
+  .ab-line { font-size: 32px }
+  .play { min-height: 140px }
+  .stop { min-height: 56px }
+}
+@media (min-width: 640px) {
+  .screen { border-left: 1px solid #333; border-right: 1px solid #333 }
+}
