@@ -6,7 +6,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2026.09.29-3';        // keep equal to VERSION in sw.js
+  const APP_VERSION = '2026.09.29-4';        // keep equal to VERSION in sw.js
   const DEBOUNCE_MS = 400, FADE_LOCK_MS = 3000, COOLDOWN_MS = 2000, LOCK_HOLD_MS = 1500,
         LONG_PRESS_MS = 550, RESUME_WINDOW_MS = 6 * 3600 * 1000, STATE_KEY = 'walkup.game.v1';
   const MODES = ['full', 'intro_only', 'silent'];
@@ -731,8 +731,21 @@
   // ---- settings, updates, diagnostics
   function openSettings() {
     if (locked) return;
-    const st = swStatus, kids = [h('h2', null, 'Settings'), h('p', { class: 'note' }, 'For use at home, not during a game.')];
-    kids.push(h('h3', null, 'App version'), h('p', null, `Running ${st ? st.pinned : APP_VERSION}`));
+    const st = swStatus, kids = [h('h2', null, 'Settings')];
+
+    // Safe any time, including mid-game: this is the in-game fix when sound drops out.
+    kids.push(h('h3', null, 'Audio'), h('p', { class: 'good' }, 'Safe during a game.'),
+      h('button', { class: 'btn', disabled: !pack, onclick: () => { sheetClose(); armNow(true); afterArm(); } }, 'Re-arm audio and Sound Check'),
+      h('button', { class: 'btn', onclick: openDiagnostics }, 'Diagnostics'));
+
+    kids.push(h('h3', null, S.active ? 'Game' : 'Team pack'));
+    if (S.active) kids.push(h('button', { class: 'btn', onclick: confirmEndGame }, 'End game…'));
+    else kids.push(h('p', { class: 'note' }, 'Importing a new pack ends the current game.'),
+      h('button', { class: 'btn', onclick: () => { sheetClose(); show('pack'); } }, 'Team pack and import'));
+
+    // Version changes reload the app: only at home, never right before a game.
+    kids.push(h('h3', null, 'App updates'), h('p', { class: 'note' }, 'At home on Wi-Fi only, never right before a game.'),
+      h('p', null, `Running ${st ? st.pinned : APP_VERSION}`));
     if (!('serviceWorker' in navigator)) {
       kids.push(h('p', { class: 'note' }, 'Offline mode and updates need the https address of this app.'));
     } else if (!st) {
@@ -749,15 +762,10 @@
       if (i > 0) kids.push(h('button', { class: 'btn', onclick: () => swCommand('rollback') }, `Roll back to ${st.versions[i - 1]}`));
       kids.push(h('button', { class: 'btn', onclick: checkForUpdate }, 'Check for update (needs Wi-Fi)'));
     }
-    kids.push(h('h3', null, 'Audio'),
-      h('button', { class: 'btn', disabled: !pack, onclick: () => { sheetClose(); armNow(true); afterArm(); } }, 'Re-arm audio and Sound Check'),
-      h('button', { class: 'btn', onclick: openDiagnostics }, 'Diagnostics'));
-    kids.push(h('h3', null, S.active ? 'Game' : 'Team pack'),
-      S.active ? h('button', { class: 'btn', onclick: confirmEndGame }, 'End game…')
-               : h('button', { class: 'btn', onclick: () => { sheetClose(); show('pack'); } }, 'Team pack and import'),
-      h('button', { class: 'btn dark', onclick: sheetClose }, 'Close'));
+    kids.push(h('button', { class: 'btn dark', onclick: sheetClose }, 'Close'));
     sheetOpen('settings', kids);
   }
+
 
   async function swSend(msg) {
     const reg = await Promise.race([navigator.serviceWorker.ready, new Promise(r => setTimeout(r, 4000))]);
