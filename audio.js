@@ -6,10 +6,12 @@
    - Pack bytes stay in memory; decoded AudioBuffers live in a 4-entry LRU filled ahead of time
      (on arm and when the queue changes), so PLAY normally starts with no decoding at all.
    - iOS can leave a context "running" but silent, stuck "interrupted", or hang resume(); every
-     suspicious sign is reported as 'trouble' so the app can show TAP TO RE-ARM. */
+     suspicious sign is reported as 'trouble' so the app can show TAP TO RE-ARM.
+   - Keep speaker awake (optional): a looping noise bed at -60 dBFS on its own GainNode, so a Bluetooth
+     speaker never idles into standby and clips the start of the next clip. It is never "the clip". */
 const AudioEngine = (() => {
   'use strict';
-  const LRU_SIZE = 4, RESUME_TIMEOUT_MS = 3000, VERIFY_MS = 1500, FADE_S = 2, STOP_S = 0.05;
+  const LRU_SIZE = 4, RESUME_TIMEOUT_MS = 3000, VERIFY_MS = 1500, FADE_S = 2, STOP_S = 0.05, BED_GAIN = 0.001;
   // Bluetooth can take a second or more to start rendering, and each new context starts it again, so the
   // checks wait and double-check (a too-eager check made every Re-arm fail the same way: a loop).
   const STARTUP = new Set(['audio did not start', 'audio did not resume', 'audio clock is stuck']);
@@ -23,6 +25,7 @@ const AudioEngine = (() => {
   const lru = new Map();            // path -> AudioBuffer, least recently used first
   const inflight = new Map();       // path -> Promise<AudioBuffer>
   let clip = null;                  // the one playing clip
+  let bed = null, keepAwake = false; // {ctx, src, gain}: the noise bed, and whether the app wants one
   const listeners = { trouble: [], change: [], healed: [] };
 
   const emit = (type, arg) => listeners[type].forEach(fn => { try { fn(arg); } catch (e) { console.error(e); } });
@@ -88,7 +91,9 @@ const AudioEngine = (() => {
       ctx = c; gen++; wasRunning = false;
       c.onstatechange = () => onState(c);
       lru.clear(); inflight.clear();          // buffers belong to the old context; bytes stay
+      bed = null;                             // it dies with the old context
     }
+    if (keepAwake) startBed();                // still inside the tap
     trouble = '';
     const g = gen;
     ready = resume();
@@ -266,6 +271,35 @@ const AudioEngine = (() => {
     // No clock check here: the Sound Check asks the parent whether it was heard.
   }
 
+  // ---- keep speaker awake: 2 s of white noise, looped, far below anything audible over a field
+  function startBed() {
+    if (!ctx || ctx.state === 'closed' || (bed && bed.ctx === ctx)) return;
+    stopBed();
+    try {
+      const ac = ctx, n = Math.round(ac.sampleRate * 2), buf = ac.createBuffer(1, n, ac.sampleRate), d = buf.getChannelData(0);
+      for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+      const src = ac.createBufferSource(), gain = ac.createGain();
+      src.buffer = buf;
+      src.loop = true;
+      gain.gain.value = BED_GAIN;
+      src.connect(gain);
+      gain.connect(ac.destination);
+      src.start();
+      bed = { ctx: ac, src, gain };
+    } catch (e) { bed = null; }
+  }
+  function stopBed() {
+    const b = bed;
+    bed = null;
+    if (!b) return;
+    try { b.src.stop(); } catch (e) { /* not started */ }
+    try { b.gain.disconnect(); } catch (e) { /* ignore */ }
+  }
+  function setKeepAwake(on) {                // call inside a tap when turning it on
+    keepAwake = !!on;
+    if (keepAwake) startBed(); else stopBed();
+  }
+
   function info() {
     const s = navigator.audioSession;
     return {
@@ -277,12 +311,13 @@ const AudioEngine = (() => {
       decoded: [...lru.keys()].length,
       clips: bytes.size,
       trouble,
+      bed: !!(bed && bed.ctx === ctx),
       log: log.slice().reverse(),
     };
   }
 
   return {
-    on, arm, resume, play, fade, stop, chime, prefetch, setBytes, testDecode, info,
+    on, arm, resume, play, fade, stop, chime, prefetch, setBytes, testDecode, info, setKeepAwake,
     touch: () => { session(); if (ctx) resume(); },   // for taps that should keep audio awake
     state: () => (ctx ? ctx.state : 'not armed'),
     trouble: () => trouble,

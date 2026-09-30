@@ -6,10 +6,19 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2026.09.29-4';        // keep equal to VERSION in sw.js
+  const APP_VERSION = '2026.09.30-1';        // keep equal to VERSION in sw.js
   const DEBOUNCE_MS = 400, FADE_LOCK_MS = 3000, COOLDOWN_MS = 2000, LOCK_HOLD_MS = 1500,
-        LONG_PRESS_MS = 550, RESUME_WINDOW_MS = 6 * 3600 * 1000, STATE_KEY = 'walkup.game.v1';
+        LONG_PRESS_MS = 550, RESUME_WINDOW_MS = 6 * 3600 * 1000, STATE_KEY = 'walkup.game.v1',
+        CHECK_TTL_MS = 6 * 3600 * 1000, TEST_FADE_AT_MS = 5000;
   const MODES = ['full', 'intro_only', 'silent'];
+  const CHECKS = [                           // pre-game checklist: [id, text]
+    ['speaker', 'Speaker connected and tested'],
+    ['airplane', 'Airplane Mode on, then Bluetooth back on'],
+    ['focus', 'Focus or Do Not Disturb on (no calls or alerts)'],
+    ['battery', 'Phone plugged into the battery pack'],
+    ['volume', 'Phone volume all the way up'],
+    ['vlc', 'VLC backup ready'],
+  ];
   const NOT_OFFLINE = 'NOT saved for offline use: it may not open in Airplane Mode. On Wi-Fi, open Settings and tap Check for update.';
   const LOCAL = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
   const audio = AudioEngine;
@@ -31,7 +40,7 @@
 
   // ---- saved state: localStorage can throw (private mode, blocked storage), so every access is wrapped
   const blank = () => ({ order: null, absent: [], lastOrder: [], cur: null, queued: null, slot: null,
-                         soundCheckAt: 0, gameAt: 0, savedAt: 0, active: false });
+                         soundCheckAt: 0, gameAt: 0, savedAt: 0, active: false, checks: {}, keepAwake: false });
   let S = blank();
   try {
     const saved = JSON.parse(localStorage.getItem(STATE_KEY) || 'null');
@@ -41,6 +50,9 @@
   if (!Array.isArray(S.absent)) S.absent = [];
   if (!Array.isArray(S.lastOrder)) S.lastOrder = [];
   if (!S.slot || typeof S.slot !== 'object' || !Number.isInteger(S.slot.at)) S.slot = null;
+  S.checks = S.checks && typeof S.checks === 'object' && !Array.isArray(S.checks)
+    ? Object.fromEntries(Object.entries(S.checks).filter(([, t]) => Number.isFinite(t))) : {};
+  if (typeof S.keepAwake !== 'boolean') S.keepAwake = false;
 
   function save() {
     S.savedAt = Date.now();
@@ -59,6 +71,8 @@
   const rearms = [];                         // recent Re-arm taps, to spot a Re-arm that isn't helping
   let swStatus = null, swError = '';
   let sheetKind = '', sheetModal = false, sheetAt = 0, shownCur = null, toastTimer = 0;
+  let checkOpen = true;                      // checklist expanded (in memory only)
+  let spk = { playing: false, asked: false, help: false, error: '' }, testSeq = 0, testTimer = 0;   // Test speaker
 
   // ---- players and lineup
   const player = id => P.get(id) || null;
@@ -172,6 +186,7 @@
 
   // ---- screens
   function show(name) {
+    if (name === 'roll') checkOpen = !allTicked();      // each visit: open unless all six are ticked
     screen = name;
     for (const s of ['pack', 'roll', 'game']) $('scr-' + s).hidden = s !== name;
     render();
@@ -211,6 +226,31 @@
     $('roll-absent').replaceChildren(...(absent.length ? absent.map(id => row(id)) : [h('li', { class: 'empty' }, 'Nobody absent.')]));
     $('btn-start').disabled = !o.length;
     $('btn-last').disabled = !S.lastOrder.length;
+    renderChecklist();
+  }
+
+  // ---- pre-game checklist: reminders only, it never blocks Start game. A tick lasts 6 hours (one game day).
+  const ticked = id => Number.isFinite(S.checks[id]) && Date.now() - S.checks[id] < CHECK_TTL_MS;
+  const allTicked = () => CHECKS.every(([id]) => ticked(id));
+  function renderChecklist() {
+    const done = CHECKS.filter(([id]) => ticked(id)).length, all = done === CHECKS.length, st = swStatus;
+    const head = h('button', { class: 'check-head', 'aria-expanded': String(checkOpen), onclick: () => { checkOpen = !checkOpen; renderChecklist(); } },
+      h('b', null, 'Before the game'),
+      h('span', { class: 'check-count' + (all ? ' done' : '') }, all ? '✓ All set' : `${done} of ${CHECKS.length}`));
+    if (!checkOpen) { $('checklist').replaceChildren(head); return; }
+    const offline = !('serviceWorker' in navigator) ? 'offline mode needs the https address of this app'
+      : st ? (st.offline ? 'saved for offline use' : 'not saved for offline use (see Settings)') : swError || 'checking offline copy…';
+    $('checklist').replaceChildren(head, h('div', { class: 'check-body' },
+      h('p', { class: 'check-auto' }, h('span', { class: 'mark ' + (st && st.offline ? 'ok' : 'warn'), 'aria-hidden': 'true' }, st && st.offline ? '✓' : '!'),
+        h('span', null, `Pack from ${pack ? pack.meta.created || 'an unknown date' : '—'} · ${offline}`)),
+      CHECKS.map(([id, text]) => h('button', { class: 'tick', role: 'checkbox', 'aria-checked': String(ticked(id)), onclick: () => toggleCheck(id) },
+        h('span', { class: 'box', 'aria-hidden': 'true' }, ticked(id) ? '✓' : ''), h('span', null, text))),
+      h('button', { class: 'btn', onclick: openSpeaker }, 'Connect speaker')));
+  }
+  function toggleCheck(id) {
+    if (ticked(id)) delete S.checks[id]; else S.checks[id] = Date.now();
+    save();
+    render();
   }
   function rollTap(id) {                     // roll call: batting -> absent, absent -> end of the order
     if (order().includes(id)) {
@@ -391,7 +431,7 @@
     updatePill();
   }
   function soundYes() {
-    soundOkAt = S.soundCheckAt = Date.now();
+    soundOkAt = S.soundCheckAt = S.checks.speaker = Date.now();
     save();
     sheetClose();
     render();
@@ -417,19 +457,23 @@
   // ---- game start / resume / end
   function startGame() {                     // click handler: synchronous until afterArm()
     if (!pack || !order().length) return;
+    stopTest();                              // never under the Sound Check chime
     armNow(false);
     tapIn = false;
     Object.assign(S, { lastOrder: order().slice(), cur: order()[0], queued: null, slot: null, gameAt: Date.now(), active: true });
+    applyKeepAwake();                        // after active is set, still inside the tap
     phase = 'idle';
     save();
     show('game');
     afterArm();
   }
   function resumeGame() {
+    stopTest();
     armNow(false);
     if (!order().includes(S.queued)) S.queued = null;
     if (!order().includes(S.cur)) setCur(nextOf(S.cur));
     S.active = true;
+    applyKeepAwake();
     phase = 'idle';
     save();
     show('game');
@@ -453,6 +497,7 @@
     locked = false;
     S.active = false;
     S.queued = S.slot = null;
+    applyKeepAwake();
     save();
     show('roll');
   }
@@ -677,6 +722,7 @@
       pack = rec;
       indexPlayers();
       S.active = false;
+      applyKeepAwake();
       mergeLineup();
       save();
       ok.textContent = `Imported the pack from ${meta.created || 'an unknown date'}: ${meta.players.length} players, every clip checked.`;
@@ -715,6 +761,13 @@
     $('sheet-body').replaceChildren(...kids.filter(Boolean));
     $('sheet').hidden = false;
   }
+  // Redraw the open sheet in place: same scroll position, and taps are not held off as for a new sheet.
+  function sheetRedraw(draw) {
+    const b = $('sheet-body'), y = b.scrollTop, at = sheetAt;
+    draw();
+    sheetAt = at;
+    b.scrollTop = y;
+  }
   function sheetClose() {
     sheetKind = '';
     $('sheet').hidden = true;
@@ -728,6 +781,103 @@
     toastTimer = setTimeout(() => { t.hidden = true; }, ms);
   }
 
+  // ---- connect speaker, test speaker, keep speaker awake. iOS can't see or pick Bluetooth devices or read
+  // the volume, so this is instructions plus a real clip at game volume for the parent to judge by ear.
+  function testPick() {                      // first batter with music, else the first such player in the pack
+    for (const id of [...order(), ...packIds()]) { const p = player(id), path = clipOf(p); if (path) return { p, path }; }
+    return null;
+  }
+  function openSpeaker() {
+    spk = { playing: spk.playing, asked: spk.playing, help: false, error: '' };
+    drawSpeaker();
+  }
+  function redrawSpeaker() { if (sheetKind === 'speaker') sheetRedraw(drawSpeaker); }
+  function drawSpeaker() {
+    const kids = [h('h2', null, 'Connect speaker'), h('ol', { class: 'steps' },
+      h('li', null, 'Turn the speaker on.'),
+      h('li', null, 'Swipe down from the top-right corner to open Control Center. Tap the AirPlay icon on the music tile and pick your speaker. (Or Settings > Bluetooth and tap it there.)'),
+      h('li', null, "Turn the phone volume all the way up, then set the loudness with the speaker's own buttons."))];
+    if (S.active) {                          // a batter's intro mid-game would confuse the field: chime only
+      kids.push(h('button', { class: 'btn primary', disabled: !pack, onclick: () => { sheetClose(); armNow(true); afterArm(); } }, 'Re-arm audio and Sound Check'),
+        h('p', { class: 'note' }, 'Uses the quiet chime, safe between batters.'));
+    } else {
+      const pick = testPick();
+      kids.push(h('button', { class: 'btn big primary', disabled: !pick || spk.playing, onclick: testSpeaker }, spk.playing ? 'Playing…' : 'Test speaker'),
+        h('p', { class: 'note' }, pick ? `Plays ${pick.p.name}'s intro at game volume, then fades.` : pack ? 'Nobody in the team pack has music to test with.' : 'Import the team pack first.'));
+      if (spk.error) kids.push(h('p', { class: 'error', role: 'alert' }, spk.error));
+      if (spk.asked) {
+        kids.push(h('p', { class: 'lead' }, 'Did you hear it?'), h('div', { class: 'row2' },
+          h('button', { class: 'btn huge primary', onclick: testYes }, 'Yes'),
+          h('button', { class: 'btn huge', onclick: testNo }, 'No — try again')));
+      }
+      if (spk.help) kids.push(h('p', { class: 'error' }, "Check the speaker is on and picked in Control Center, the phone volume is up, and the sound isn't coming out of the phone itself. Then tap Test speaker again."));
+    }
+    kids.push(...keepAwakeSwitch(drawSpeaker), h('button', { class: 'btn dark', onclick: sheetClose }, 'Close'));
+    sheetOpen('speaker', kids);
+  }
+
+  function testSpeaker() {                   // click handler: synchronous until the first await (iOS gesture)
+    const pick = testPick();
+    if (spk.playing || S.active || !pick) return;
+    const st = audio.state();
+    if (st === 'not armed' || st === 'closed' || audio.trouble()) audio.arm(false);   // not armNow(): no game yet
+    const my = ++testSeq;
+    spk = { playing: true, asked: false, help: false, error: '' };
+    redrawSpeaker();
+    (async () => {
+      const fail = msg => { if (my !== testSeq) return; spk.playing = false; spk.error = msg; redrawSpeaker(); };
+      try { await ensureBytes(); } catch (e) { fail((e && e.message) || String(e)); return; }
+      const ok = (await audio.ready()) || audio.state() === 'running';
+      if (my !== testSeq) return;
+      if (!ok) { fail("Audio didn't start. Tap Test speaker again."); return; }
+      let t = 0;
+      audio.play(pick.path, (reason, err) => {
+        clearTimeout(t);                     // never fade whatever clip plays next
+        if (testTimer === t) testTimer = 0;
+        if (my !== testSeq) return;
+        spk.playing = false;
+        if (reason === 'error') { spk.asked = false; spk.error = `Could not play the clip: ${(err && err.message) || 'unknown error'}`; }
+        redrawSpeaker();
+      });
+      t = testTimer = setTimeout(() => { if (testTimer === t) testTimer = 0; if (my === testSeq && spk.playing && audio.playing()) audio.fade(); }, TEST_FADE_AT_MS);
+      spk.asked = true;
+      redrawSpeaker();
+    })();
+  }
+  function stopTest() {                      // a test clip still playing (or loading) stops now
+    if (!spk.playing) return;
+    testSeq++;
+    clearTimeout(testTimer);
+    testTimer = 0;
+    spk.playing = false;
+    audio.stop();
+  }
+  function testYes() {
+    S.checks.speaker = Date.now();
+    save();
+    toast('Speaker checked.');
+    sheetClose();
+    render();
+  }
+  function testNo() {
+    stopTest();
+    spk = { playing: false, asked: false, help: true, error: '' };
+    redrawSpeaker();
+  }
+
+  function applyKeepAwake() { audio.setKeepAwake(!!(S.keepAwake && S.active)); }   // on only during a game
+  function keepAwakeSwitch(redraw) {
+    const on = S.keepAwake;
+    return [h('button', { class: 'switch', role: 'switch', 'aria-checked': String(on), onclick: () => {
+      S.keepAwake = !S.keepAwake;
+      save();
+      applyKeepAwake();                      // inside the tap: may start the bed
+      sheetRedraw(redraw);
+      toast(!S.keepAwake ? 'Keep speaker awake is off.' : S.active ? 'Keep speaker awake is on.' : 'Keep speaker awake is on. It starts with the game.');
+    } }, h('span', { class: 'switch-label' }, 'Keep speaker awake'), h('span', { class: 'switch-state' }, on ? 'ON' : 'OFF'), h('span', { class: 'knob', 'aria-hidden': 'true' })),
+    h('p', { class: 'note' }, 'Plays a very faint hiss during a game so the speaker never dozes off and clips "Now batting". Off unless you turn it on.')];
+  }
+
   // ---- settings, updates, diagnostics
   function openSettings() {
     if (locked) return;
@@ -736,6 +886,8 @@
     // Safe any time, including mid-game: this is the in-game fix when sound drops out.
     kids.push(h('h3', null, 'Audio'), h('p', { class: 'good' }, 'Safe during a game.'),
       h('button', { class: 'btn', disabled: !pack, onclick: () => { sheetClose(); armNow(true); afterArm(); } }, 'Re-arm audio and Sound Check'),
+      h('button', { class: 'btn', onclick: openSpeaker }, 'Connect speaker'),
+      ...keepAwakeSwitch(() => openSettings()),
       h('button', { class: 'btn', onclick: openDiagnostics }, 'Diagnostics'));
 
     kids.push(h('h3', null, S.active ? 'Game' : 'Team pack'));
@@ -786,6 +938,7 @@
     } catch (e) { swError = e.message; }
     if (sheetKind === 'settings') openSettings();
     if (screen === 'pack') renderPack();
+    if (screen === 'roll') renderRoll();
   }
   async function swCommand(type) {           // Update / Roll back: re-pin, then reload into that version
     try {
@@ -822,6 +975,7 @@
     } catch (e) {
       swError = 'Offline copy failed: ' + e.message;
       if (screen === 'pack') renderPack();
+      if (screen === 'roll') renderRoll();
     }
   }
 
@@ -849,6 +1003,8 @@
       ['Interruption', a.trouble || 'none'],
       ['Recent audio trouble', a.log.length ? a.log.slice(0, 6).map(e => `${e.at} ${e.reason} (${e.state}, session ${e.session})`).join(' · ') : 'none'],
       ['Wake lock', !wake.supported ? 'not supported here (set Auto-Lock to Never)' : wake.held() ? 'held' : `not held${wake.error ? ` (${wake.error})` : ''}`],
+      ['Keep speaker awake', !S.keepAwake ? 'off' : !S.active ? 'on (starts with the game)' : a.bed ? 'on (playing)' : 'on (not playing: tap Re-arm)'],
+      ['Speaker test', ticked('speaker') ? time(S.checks.speaker) : 'not today'],
       ['Sound Check', armedAt && soundOkAt >= armedAt ? `confirmed ${time(soundOkAt)}` : S.soundCheckAt ? `not since arming (last ${time(S.soundCheckAt)})` : 'not yet'],
       ['Home Screen app', standalone ? 'yes' : 'no (browser tab)'],
       ['User agent', navigator.userAgent],
