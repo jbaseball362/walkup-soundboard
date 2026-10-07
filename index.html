@@ -27,6 +27,9 @@
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="i-gear" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="3">
     <circle cx="12" cy="12" r="8.5" stroke-dasharray="3.4 3.28"/><circle cx="12" cy="12" r="5.5"/></g></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path fill="currentColor" d="M6.5 5h4v14h-4zM13.5 5h4v14h-4z"/></symbol>
+  <symbol id="i-skip" viewBox="0 0 24 24"><path fill="currentColor" d="M5 5v14l10-7zM16 5h3v14h-3z"/></symbol>
 </svg>
 
 <!-- Team pack -->
@@ -87,7 +90,14 @@
     <ul id="roll-absent" class="roll absent"></ul>
   </main>
   <footer class="dock">
+    <!-- Warm-up music: only when the pack has warm-up songs and no game is active (app.js renderWarm) -->
+    <div id="warm" class="warm" hidden>
+      <button id="warm-open" class="warm-open" aria-haspopup="dialog"><b>Warm-up music</b><span id="warm-sub" class="warm-sub"></span></button>
+      <button id="warm-skip" class="warm-skip" aria-label="Skip to the next song"><svg aria-hidden="true"><use href="#i-skip"/></svg></button>
+      <button id="warm-play" class="warm-play" aria-label="Play warm-up music"><svg class="ic-play" aria-hidden="true"><use href="#i-play"/></svg><svg class="ic-pause" aria-hidden="true"><use href="#i-pause"/></svg></button>
+    </div>
     <button id="btn-start" class="btn huge primary">Start game</button>
+    <p id="warm-note" class="warm-note" hidden>Start game fades the music out</p>
     <div class="dead"></div>
   </footer>
 </section>
@@ -122,7 +132,7 @@
   </footer>
 </section>
 
-<!-- Bottom sheet (sound check, resume, settings, connect speaker, diagnostics, player menu) -->
+<!-- Bottom sheet (sound check, resume, settings, connect speaker, diagnostics, player menu, warm-up music) -->
 <div id="sheet" class="sheet-wrap" hidden>
   <div class="sheet" role="dialog" aria-modal="true" id="sheet-body"></div>
 </div>

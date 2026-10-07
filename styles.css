@@ -128,6 +128,30 @@ button { cursor: pointer; touch-action: manipulation }
 .switch[aria-checked=true] .knob { background: var(--red) }
 .switch[aria-checked=true] .knob::after { transform: translateX(24px) }
 
+/* ---- warm-up music: dark mini player above Start game, and its sheet */
+.warm { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; padding: 6px; border-radius: 14px; background: var(--black); color: var(--white) }
+.warm-open { flex: 1; min-width: 0; min-height: 48px; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; padding: 0 6px 0 8px; border: 0; background: transparent; color: var(--white); text-align: left }
+.warm-open b { font-size: 17px; font-weight: 850 }
+.warm-sub { display: block; max-width: 100%; font-size: 14px; font-weight: 600; opacity: .85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.warm-skip, .warm-play { flex: none; display: inline-flex; align-items: center; justify-content: center; padding: 0; color: var(--white) }
+.warm-skip { width: 48px; height: 48px; border: 2px solid rgba(255,255,255,.55); border-radius: 12px; background: transparent }
+.warm-skip:disabled { opacity: .35; cursor: default }
+.warm-play { width: 52px; height: 52px; border: 0; border-radius: 50%; background: var(--red) }
+.warm-play:active { background: var(--red-press) }
+.warm-skip svg, .warm-play svg { width: 26px; height: 26px }
+.warm-play .ic-pause, .warm-play.on .ic-play { display: none }
+.warm-play.on .ic-pause { display: inline }
+.warm-note { margin: 6px 0 0; text-align: center; font-size: 14px; font-weight: 650; color: var(--muted) }
+.warm-now { margin: 12px 0 8px }
+.warm-now b { display: block; font-size: 22px; font-weight: 900; overflow-wrap: anywhere }
+.warm-now span { color: var(--muted); font-weight: 650 }
+.warm-prog { height: 8px; border-radius: 999px; background: var(--soft2); overflow: hidden }
+.warm-fill { height: 100%; width: 0; background: var(--red) }
+.sheet .warm-time { margin: 4px 0 0; min-height: 20px; text-align: right; font-size: 14px; font-weight: 650; color: var(--muted) }
+.warm-next { margin: 4px 0 0; padding-left: 24px; font-size: 17px; font-weight: 700 }
+.warm-next li { margin: 4px 0; overflow-wrap: anywhere }
+.warm-next li.more { list-style: none; margin-left: -24px; color: var(--muted); font-weight: 600 }
+
 /* ---- game screen */
 .gbar {
   flex: none; display: flex; align-items: center; gap: 6px; background: var(--black); color: var(--white);

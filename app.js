@@ -2,11 +2,12 @@
    Appendix C). Audio lives in audio.js (AudioEngine), storage in store.js (Store), zips in zip.js.
    Game flow: IDLE -> PLAYING -> (FADE 2 s | clip ends | STOP) -> COOLDOWN 2 s -> next batter.
    A silent batter's PLAY goes straight to COOLDOWN; STOP in the first 3 s aborts (she stays up).
+   Warm-up music (Batting order screen, only when no game is active) shuffles the pack's warm-up songs forever.
    The shell is generic: every name, number and clip comes from the team pack on this phone. */
 (() => {
   'use strict';
 
-  const APP_VERSION = '2026.09.30-1';        // keep equal to VERSION in sw.js
+  const APP_VERSION = '2026.10.07-1';        // keep equal to VERSION in sw.js
   const DEBOUNCE_MS = 400, FADE_LOCK_MS = 3000, COOLDOWN_MS = 2000, LOCK_HOLD_MS = 1500,
         LONG_PRESS_MS = 550, RESUME_WINDOW_MS = 6 * 3600 * 1000, STATE_KEY = 'walkup.game.v1',
         CHECK_TTL_MS = 6 * 3600 * 1000, TEST_FADE_AT_MS = 5000;
@@ -73,6 +74,9 @@
   let sheetKind = '', sheetModal = false, sheetAt = 0, shownCur = null, toastTimer = 0;
   let checkOpen = true;                      // checklist expanded (in memory only)
   let spk = { playing: false, asked: false, help: false, error: '' }, testSeq = 0, testTimer = 0;   // Test speaker
+  // Warm-up music: order = this round's shuffled entry indexes, k = the current one (-1 before the first),
+  // next = the following round once something has peeked past this one. pos = paused position (s).
+  const W = { order: [], k: -1, next: null, state: 'stopped', pos: 0, seq: 0, lastTap: 0, timer: 0 };
 
   // ---- players and lineup
   const player = id => P.get(id) || null;
@@ -195,6 +199,7 @@
     if (screen === 'pack') renderPack();
     else if (screen === 'roll') renderRoll();
     else if (screen === 'game') renderGame();
+    renderWarm();                            // hidden whenever a game is active
     updatePill();
   }
 
@@ -417,6 +422,7 @@
     // A decode that never settles (WebKit) must not hold this sheet up: 3 s, then prefetchQueue carries on.
     await Promise.race([audio.prefetch([S.cur, ...upcoming(2)].map(id => clipOf(player(id)))),
       new Promise(r => setTimeout(r, 3000))]);
+    await audio.musicQuiet();                // Start game's warm-up fade finishes before the chime
     const ok = await audio.ready();
     if (my !== armSeq) return;
     audio.chime();
@@ -457,6 +463,7 @@
   // ---- game start / resume / end
   function startGame() {                     // click handler: synchronous until afterArm()
     if (!pack || !order().length) return;
+    warmStop(1.5, true);                     // inside the tap, before the Sound Check
     stopTest();                              // never under the Sound Check chime
     armNow(false);
     tapIn = false;
@@ -468,6 +475,7 @@
     afterArm();
   }
   function resumeGame() {
+    warmStop(1.5, true);
     stopTest();
     armNow(false);
     if (!order().includes(S.queued)) S.queued = null;
@@ -656,6 +664,7 @@
       throw new Error(`This pack is format ${raw && raw.schema}, but this app reads format 1. Rebuild the pack or update the app.`);
     }
     const players = checkPlayers(raw, entries);
+    const warmup = checkWarmup(raw, entries, players);
     const names = Object.keys(entries).filter(n => n.startsWith('audio/'));
     const files = {};
     for (let i = 0; i < names.length; i++) {  // test-decode EVERY clip now, not at the game
@@ -671,7 +680,27 @@
       if (!decoded || !(decoded.duration > 0.1)) throw new Error(`${name} is empty.`);
       files[name] = { bytes, type: 'audio/mp4' };
     }
-    return { meta: { schema: 1, created: String(raw.created || ''), players }, files };
+    return { meta: { schema: 1, created: String(raw.created || ''), players, warmup }, files };
+  }
+
+  // Optional "warmup" list (packs before it have none): every file must be in the pack, like player audio.
+  function checkWarmup(raw, entries, players) {
+    if (raw.warmup == null) return [];
+    if (!Array.isArray(raw.warmup)) throw new Error('pack.json "warmup" is not a list.');
+    const ids = new Set(players.map(p => p.id));
+    return raw.warmup.map((w, i) => {
+      const where = `pack.json warm-up song ${i + 1}`;
+      if (!w || typeof w !== 'object') throw new Error(`${where} is not readable.`);
+      if (typeof w.file !== 'string' || !w.file.startsWith('audio/') || !(w.file in entries)) {
+        throw new Error(`${where}: "${w.file}" is missing from the pack.`);
+      }
+      return {
+        file: w.file, title: typeof w.title === 'string' && w.title.trim() ? w.title.trim() : `Song ${i + 1}`,
+        players: Array.isArray(w.players) ? [...new Set(w.players.filter(id => ids.has(id)))] : [],
+        seconds: Number.isFinite(+w.seconds) ? +w.seconds : 0,
+        lufs: w.lufs == null || !Number.isFinite(+w.lufs) ? null : +w.lufs,
+      };
+    });
   }
 
   function checkPlayers(raw, entries) {
@@ -706,6 +735,7 @@
   async function importFrom(getBytes, from) {
     if (importing || locked) return;
     importing = true;
+    warmStop(0.4, true);
     const prog = $('import-progress'), err = $('import-error'), ok = $('import-ok');
     err.hidden = ok.hidden = true;
     prog.hidden = false;
@@ -720,6 +750,7 @@
       audio.setBytes(null);                  // Start game loads the new pack from storage
       loadedPackId = null;
       pack = rec;
+      Object.assign(W, { order: [], k: -1, next: null, state: 'stopped', pos: 0 });
       indexPlayers();
       S.active = false;
       applyKeepAwake();
@@ -819,6 +850,7 @@
   function testSpeaker() {                   // click handler: synchronous until the first await (iOS gesture)
     const pick = testPick();
     if (spk.playing || S.active || !pick) return;
+    warmStop(0.3);                           // the test clip plays on its own
     const st = audio.state();
     if (st === 'not armed' || st === 'closed' || audio.trouble()) audio.arm(false);   // not armNow(): no game yet
     const my = ++testSeq;
@@ -876,6 +908,169 @@
       toast(!S.keepAwake ? 'Keep speaker awake is off.' : S.active ? 'Keep speaker awake is on.' : 'Keep speaker awake is on. It starts with the game.');
     } }, h('span', { class: 'switch-label' }, 'Keep speaker awake'), h('span', { class: 'switch-state' }, on ? 'ON' : 'OFF'), h('span', { class: 'knob', 'aria-hidden': 'true' })),
     h('p', { class: 'note' }, 'Plays a very faint hiss during a game so the speaker never dozes off and clips "Now batting". Off unless you turn it on.')];
+  }
+
+  // ---- warm-up music: only while no game is active. Every girl's song, shuffled, round after round; the engine
+  // crossfades from one to the next and asks this queue what comes after the current song.
+  const warmList = () => (pack && Array.isArray(pack.meta.warmup) ? pack.meta.warmup : []);
+  const warmOn = () => warmList().length > 0 && !S.active;
+  const warmCur = () => (W.k >= 0 ? warmList()[W.order[W.k]] || null : null);
+  const mmss = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+  function shuffled(n, avoid) {              // a new round never opens with the song that just played
+    const a = [...Array(n).keys()];
+    for (let i = n - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+    if (n > 1 && a[0] === avoid) { const j = 1 + Math.floor(Math.random() * (n - 1)); [a[0], a[j]] = [a[j], a[0]]; }
+    return a;
+  }
+  function warmPeek() {                      // entry index that plays after the current one
+    const n = warmList().length;
+    if (!n) return null;
+    if (!W.order.length) W.order = shuffled(n);
+    if (W.k + 1 < W.order.length) return W.order[W.k + 1];
+    if (!W.next) W.next = shuffled(n, W.order[W.k]);
+    return W.next[0];
+  }
+  function warmTake() {
+    const i = warmPeek();
+    if (i == null) return null;
+    if (W.k + 1 < W.order.length) W.k++;
+    else { W.order = W.next; W.next = null; W.k = 0; }
+    return i;
+  }
+  const fileOf = i => (i == null ? null : (warmList()[i] || {}).file || null);
+  function whose(e) {                        // "Test One's song", "Test One and Test Two's song"
+    const names = e.players.map(id => player(id)).filter(Boolean).map(p => p.name);
+    if (!names.length) return '';
+    return (names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]) + "'s song";
+  }
+  function warmPos() {                       // [position, length] of the current song in seconds
+    const e = warmCur(), i = audio.musicInfo();
+    if (!e) return [0, 0];
+    if (W.state === 'playing' && i.playing && i.path === e.file) return [i.position, i.duration || e.seconds];
+    return [W.state === 'stopped' ? 0 : W.pos, e.seconds];
+  }
+
+  function warmToggle() {                    // click handler (mini player and sheet)
+    const now = performance.now();
+    if (now - W.lastTap < DEBOUNCE_MS) return;
+    W.lastTap = now;
+    if (W.state === 'playing') warmPause(); else warmPlay();
+  }
+  function warmPlay() {                      // synchronous until the first await (iOS gesture)
+    if (!warmOn() || W.state === 'playing') return;
+    const st = audio.state();
+    if (st === 'not armed' || st === 'closed' || audio.trouble()) audio.arm(false);   // like Test speaker: not armNow()
+    else audio.touch();
+    wake.request();
+    if (W.state === 'stopped' || W.k < 0) { warmTake(); W.pos = 0; }
+    warmStart(W.pos, W.pos ? 0.5 : 1);
+  }
+  function warmStart(offset, fadeIn) {
+    const e = warmCur(), my = ++W.seq;
+    if (!e) return;
+    W.state = 'playing';
+    W.pos = offset;                          // what Pause keeps if it comes before the song starts
+    warmChanged();
+    (async () => {
+      const fail = msg => { if (my !== W.seq) return; W.seq++; W.state = 'stopped'; warmChanged(); toast(msg, 4000); };
+      try { await ensureBytes(); } catch (err) { fail((err && err.message) || String(err)); return; }
+      const ok = (await audio.ready()) || audio.state() === 'running';
+      if (my !== W.seq) return;
+      if (!ok) { fail("Audio didn't start. Tap Play again."); return; }
+      audio.musicPlay(e.file, { offset, fadeIn });
+    })();
+  }
+  function warmPause() {                     // short fade; Play carries on from here
+    if (W.state !== 'playing') return;
+    W.pos = warmPos()[0];
+    W.seq++;
+    W.state = 'paused';
+    audio.musicStop(0.4);
+    warmChanged();
+  }
+  function warmSkip() {                      // click handler: ~1 s crossfade into the next song
+    const now = performance.now();
+    if (!warmOn() || W.state === 'stopped' || now - W.lastTap < DEBOUNCE_MS) return;
+    W.lastTap = now;
+    warmTake();
+    W.pos = 0;
+    if (W.state === 'paused') { warmChanged(); return; }
+    audio.touch();
+    warmStart(0, 1);
+  }
+  function warmStop(fadeS, release) {        // Start game, Test speaker, import: the music fades and forgets its place
+    W.seq++;
+    W.state = 'stopped';
+    W.pos = 0;
+    audio.musicStop(fadeS, release);
+    warmChanged();
+  }
+  function warmEvent(e) {                    // from the engine: a song started, or the music died
+    if (e.kind === 'song') W.pos = 0;
+    if (e.kind === 'stopped' && e.reason !== 'stopped' && W.state === 'playing') {
+      W.seq++;
+      W.state = 'stopped';
+      if (e.reason === 'error') toast(`Could not play this song: ${(e.error && e.error.message) || 'unknown error'}`, 4000);
+    }
+    warmChanged();
+  }
+
+  function renderWarm() {                    // the mini player in the Batting order dock
+    const on = warmOn(), e = warmCur(), n = warmList().length, playing = W.state === 'playing';
+    $('warm').hidden = !on;
+    $('warm-note').hidden = !on || W.state === 'stopped';
+    if (!on) return;
+    $('warm-sub').textContent = W.state === 'stopped' || !e ? `${n} songs, shuffled` : `${e.title} · song ${W.k + 1} of ${n}`;
+    $('warm-play').classList.toggle('on', playing);
+    $('warm-play').setAttribute('aria-label', playing ? 'Pause warm-up music' : 'Play warm-up music');
+    $('warm-skip').disabled = W.state === 'stopped';
+  }
+  function warmChanged() {
+    renderWarm();
+    if (sheetKind === 'warmup') sheetRedraw(drawWarm);
+    warmTick();
+  }
+  function warmTick() {                      // ~1 s refresh, only while the sheet is open or music is playing
+    const want = () => W.state === 'playing' || sheetKind === 'warmup';
+    if (!want() || W.timer) return;
+    W.timer = setInterval(() => {
+      if (!want()) { clearInterval(W.timer); W.timer = 0; return; }
+      renderWarm();
+      warmProgress();
+    }, 1000);
+  }
+  function warmProgress() {                  // in place, so a tap on the sheet's buttons is never lost to a redraw
+    const fill = $('warm-fill'), time = $('warm-time');
+    if (!fill || !time) return;
+    const [pos, len] = warmPos(), pct = len ? Math.min(100, Math.round(pos / len * 100)) : 0;
+    fill.style.width = pct + '%';
+    fill.parentNode.setAttribute('aria-valuenow', pct);
+    time.textContent = len ? `${mmss(pos)} / ${mmss(len)}` : '';
+  }
+  function openWarm() { drawWarm(); warmTick(); }
+  function drawWarm() {
+    const list = warmList(), e = W.state === 'stopped' ? null : warmCur(), n = list.length;
+    if (!W.order.length && n) W.order = shuffled(n);
+    const rest = W.order.slice(W.k + 1), up = rest.slice(0, 3);
+    sheetOpen('warmup', [
+      h('h2', null, 'Warm-up music'),
+      h('p', { class: 'note' }, "Every girl's song, shuffled, on repeat"),
+      h('div', { class: 'warm-now' },
+        h('b', null, e ? e.title : 'Not playing'),
+        h('span', null, e ? whose(e) : `${n} songs, shuffled`)),
+      h('div', { class: 'warm-prog', role: 'progressbar', 'aria-label': 'Song progress', 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': 0 },
+        h('div', { class: 'warm-fill', id: 'warm-fill' })),
+      h('p', { class: 'warm-time', id: 'warm-time' }),
+      h('div', { class: 'row2' },
+        h('button', { class: 'btn big primary', onclick: warmToggle }, W.state === 'playing' ? 'Pause' : 'Play'),
+        h('button', { class: 'btn big', disabled: W.state === 'stopped', onclick: warmSkip }, 'Skip')),
+      h('h3', null, 'Up next'),
+      h('ol', { class: 'warm-next' }, up.map(i => h('li', null, list[i].title)),
+        rest.length > up.length && h('li', { class: 'more' }, `and ${rest.length - up.length} more`)),
+      h('p', { class: 'note' }, 'then reshuffles and keeps going'),
+      h('button', { class: 'btn dark', onclick: sheetClose }, 'Close'),
+    ]);
+    warmProgress();
   }
 
   // ---- settings, updates, diagnostics
@@ -1003,6 +1198,8 @@
       ['Interruption', a.trouble || 'none'],
       ['Recent audio trouble', a.log.length ? a.log.slice(0, 6).map(e => `${e.at} ${e.reason} (${e.state}, session ${e.session})`).join(' · ') : 'none'],
       ['Wake lock', !wake.supported ? 'not supported here (set Auto-Lock to Never)' : wake.held() ? 'held' : `not held${wake.error ? ` (${wake.error})` : ''}`],
+      ['Warm-up music', !warmList().length ? 'not in this pack'
+        : `${warmList().length} songs · ${W.state === 'playing' && warmCur() ? 'playing ' + warmCur().title : W.state}`],
       ['Keep speaker awake', !S.keepAwake ? 'off' : !S.active ? 'on (starts with the game)' : a.bed ? 'on (playing)' : 'on (not playing: tap Re-arm)'],
       ['Speaker test', ticked('speaker') ? time(S.checks.speaker) : 'not today'],
       ['Sound Check', armedAt && soundOkAt >= armedAt ? `confirmed ${time(soundOkAt)}` : S.soundCheckAt ? `not since arming (last ${time(S.soundCheckAt)})` : 'not yet'],
@@ -1041,6 +1238,11 @@
     $('btn-clear').addEventListener('click', () => { everyoneAbsent(); tapIn = false; changed(); });
     $('btn-tapdone').addEventListener('click', () => { tapIn = false; render(); });
     $('btn-start').addEventListener('click', startGame);
+    $('warm-open').addEventListener('click', openWarm);
+    $('warm-play').addEventListener('click', warmToggle);
+    $('warm-skip').addEventListener('click', warmSkip);
+    audio.musicQueue({ peek: () => fileOf(warmPeek()), take: () => fileOf(warmTake()) });
+    audio.on('music', warmEvent);
 
     $('btn-play').addEventListener('click', onPlay);
     $('btn-stop').addEventListener('click', onStop);

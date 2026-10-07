@@ -8,7 +8,10 @@
    - iOS can leave a context "running" but silent, stuck "interrupted", or hang resume(); every
      suspicious sign is reported as 'trouble' so the app can show TAP TO RE-ARM.
    - Keep speaker awake (optional): a looping noise bed at -60 dBFS on its own GainNode, so a Bluetooth
-     speaker never idles into standby and clips the start of the next clip. It is never "the clip". */
+     speaker never idles into standby and clips the start of the next clip. It is never "the clip".
+   - Warm-up music (outside a game): a separate MUSIC channel with its own gains and its own two-buffer cache
+     (current + next), so it never touches the clip, its LRU, its timers or the bed. Songs crossfade on the
+     audio clock; the app supplies the order through musicQueue(). A replaced context takes the music with it. */
 const AudioEngine = (() => {
   'use strict';
   const LRU_SIZE = 4, RESUME_TIMEOUT_MS = 3000, VERIFY_MS = 1500, FADE_S = 2, STOP_S = 0.05, BED_GAIN = 0.001;
@@ -26,7 +29,8 @@ const AudioEngine = (() => {
   const inflight = new Map();       // path -> Promise<AudioBuffer>
   let clip = null;                  // the one playing clip
   let bed = null, keepAwake = false; // {ctx, src, gain}: the noise bed, and whether the app wants one
-  const listeners = { trouble: [], change: [], healed: [] };
+  let music = null;                 // the running warm-up music session (see the music section below)
+  const listeners = { trouble: [], change: [], healed: [], music: [] };
 
   const emit = (type, arg) => listeners[type].forEach(fn => { try { fn(arg); } catch (e) { console.error(e); } });
   const on = (type, fn) => listeners[type].push(fn);
@@ -43,6 +47,7 @@ const AudioEngine = (() => {
     log.push({ at: new Date().toLocaleTimeString(), reason, state: ctx ? ctx.state : 'none',
                session: navigator.audioSession ? navigator.audioSession.state : 'n/a' });
     if (log.length > 20) log.shift();
+    musicKill('trouble');                    // it may be silent now: show it stopped, Play starts it again
     emit('trouble', reason);
     emit('change');
   }
@@ -92,6 +97,7 @@ const AudioEngine = (() => {
       c.onstatechange = () => onState(c);
       lru.clear(); inflight.clear();          // buffers belong to the old context; bytes stay
       bed = null;                             // it dies with the old context
+      musicKill('rearm');                     // and so does warm-up music
     }
     if (keepAwake) startBed();                // still inside the tap
     trouble = '';
@@ -130,6 +136,7 @@ const AudioEngine = (() => {
   // ---- bytes and decoded buffers
   function setBytes(files) {                 // {path: {bytes, type}} or null to forget the pack
     stopNow('replaced');
+    musicKill('replaced');
     bytes = new Map(files ? Object.entries(files).map(([k, v]) => [k, v.bytes]) : []);
     lru.clear(); inflight.clear();
   }
@@ -300,6 +307,169 @@ const AudioEngine = (() => {
     if (keepAwake) startBed(); else stopBed();
   }
 
+  // ---- warm-up music: never "the clip" (playing(), FADE/STOP and the clock check ignore it)
+  const XFADE_S = 3, LEAD_S = 0.4;
+  const mcache = new Map();          // path -> AudioBuffer: only the current and the next song
+  const minflight = new Map();
+  let queue = null;                  // {peek, take} from the app: what plays after the current song
+  let quietAt = 0;                   // performance.now() when the last stopped song has faded out
+  let releaseTimer = 0;
+
+  function musicBuffer(path) {
+    const hit = mcache.get(path);
+    if (hit) return Promise.resolve(hit);
+    if (minflight.has(path)) return minflight.get(path);
+    const ab = bytes.get(path);
+    if (!ctx) return Promise.reject(new Error('Audio is not armed.'));
+    if (!ab) return Promise.reject(new Error('This song is missing from the pack.'));
+    const g = gen;
+    const p = decode(ctx, ab.slice(0)).then(buf => {
+      if (g === gen) mcache.set(path, buf);
+      return buf;
+    }).finally(() => { if (minflight.get(path) === p) minflight.delete(path); });
+    minflight.set(path, p);
+    return p;
+  }
+  function keepOnly(paths) {         // a 90 s song is ~30 MB decoded: never hold more than two
+    for (const k of [...mcache.keys()]) if (!paths.includes(k)) mcache.delete(k);
+  }
+  function musicPrefetch(path) {
+    if (!path || !ctx) return;
+    const m = music;
+    keepOnly([m && m.cur && m.cur.path, path]);
+    musicBuffer(path).catch(() => { /* reported if it is ever played */ });
+  }
+
+  /* Fade a song to silence from `from` over `sec`, then stop it. One that has not started yet never plays.
+     A song already fading out (a crossfade under way) is only ever cut shorter, never stretched. */
+  function fadeVoice(v, from, sec) {
+    const ac = v.ctx, now = ac.currentTime, g = v.gain.gain, end = Math.max(from, now) + sec;
+    if (v.at > now + 0.005) { v.out = true; v.stopAt = now; try { v.src.stop(0); } catch (e) { /* ignore */ } return; }
+    if (v.out && v.stopAt <= end + 0.05) return;
+    v.out = true;
+    const val = g.value;             // read before cancelling (the cancelled ramp would drop the level)
+    g.cancelScheduledValues(now);
+    g.setValueAtTime(val, now);
+    if (from > now) g.setValueAtTime(val, from);
+    g.linearRampToValueAtTime(0, end);
+    v.stopAt = Math.min(v.stopAt, end + 0.05);
+    try { v.src.stop(end + 0.05); } catch (e) { /* older WebKit: gain is 0 anyway */ }
+  }
+  // Fade every song of the session, including one already crossfading out; musicQuiet() waits for the last.
+  function fadeAll(m, sec) {
+    for (const v of m.voices) fadeVoice(v, 0, sec);
+    const last = m.voices.reduce((t, v) => Math.max(t, v.stopAt), m.ctx.currentTime);
+    quietAt = Math.max(quietAt, performance.now() + (last - m.ctx.currentTime + 0.05) * 1000);
+  }
+
+  // Start `buf` at audio time `at`, fading it in over `fadeIn` while every other song fades out.
+  function startVoice(m, path, buf, at, offset, fadeIn) {
+    const ac = m.ctx, off = Math.min(Math.max(0, offset || 0), Math.max(0, buf.duration - 0.25));
+    for (const v of m.voices) fadeVoice(v, at, fadeIn);
+    const src = ac.createBufferSource(), gain = ac.createGain();
+    src.buffer = buf;
+    gain.gain.value = 0;
+    gain.gain.setValueAtTime(0, at);
+    gain.gain.linearRampToValueAtTime(1, at + fadeIn);
+    src.connect(gain);
+    gain.connect(ac.destination);
+    const end = at + buf.duration - off;
+    const v = { ctx: ac, path, src, gain, at, off, dur: buf.duration, end, stopAt: end, out: false };
+    src.onended = () => voiceEnded(m, v);
+    src.start(at, off);
+    m.voices.push(v);
+    m.cur = v;
+    m.pending = false;
+    emit('music', { kind: 'song', path });
+    planNext(m, v);
+  }
+  function voiceEnded(m, v) {
+    try { v.gain.disconnect(); } catch (e) { /* ignore */ }
+    m.voices = m.voices.filter(x => x !== v);
+    if (music === m && m.cur === v && !m.pending) musicEnd(m, 'ended');   // nothing came after it
+  }
+
+  // Decode the next song now; just before the current one's last XFADE_S seconds, schedule the crossfade.
+  function planNext(m, v) {
+    clearTimeout(m.timer);
+    const next = queue ? queue.peek() : null;
+    if (next) musicPrefetch(next);
+    const xf = Math.min(XFADE_S, (v.end - v.at) / 2);
+    m.timer = setTimeout(() => crossfade(m, v), Math.max(0, (v.end - xf - LEAD_S - m.ctx.currentTime) * 1000));
+  }
+  function crossfade(m, v) {
+    if (music !== m || m.cur !== v) return;
+    const path = queue ? queue.take() : null;
+    if (!path) return;                         // the song just ends
+    m.pending = true;
+    const seq = m.seq;
+    musicBuffer(path).then(buf => {
+      if (music !== m || m.seq !== seq || m.ctx !== ctx) return;
+      const now = m.ctx.currentTime, xf = Math.min(XFADE_S, (v.end - v.at) / 2, buf.duration / 2);
+      // On time: the next song starts xf before this one ends. Late (slow decode): as soon as it can.
+      const at = Math.max(now + 0.03, v.end - xf);
+      startVoice(m, path, buf, at, 0, Math.max(0.05, Math.min(xf, v.end - at)));
+    }, err => { if (music === m && m.seq === seq) musicEnd(m, 'error', err); });
+  }
+
+  function musicEnd(m, reason, err) {
+    if (music !== m) return;
+    if (reason === 'error') fadeAll(m, 0.4);   // the next song failed: don't leave the one playing unreachable
+    music = null;
+    clearTimeout(m.timer);
+    emit('music', { kind: 'stopped', reason, error: err });
+    emit('change');
+  }
+
+  /* Play `path` now (from `offset` s), crossfading over `fadeIn` s from any music already playing.
+     Call it once the context is running (the app arms inside the tap first). */
+  function musicPlay(path, opts = {}) {
+    session();
+    if (!ctx) return;
+    resume();
+    clearTimeout(releaseTimer);
+    if (!music || music.ctx !== ctx) music = { ctx, voices: [], cur: null, timer: 0, seq: 0, pending: false };
+    const m = music, seq = ++m.seq, fadeIn = Math.max(0.05, opts.fadeIn == null ? 1 : opts.fadeIn);
+    clearTimeout(m.timer);
+    m.pending = true;
+    musicBuffer(path).then(buf => {
+      if (music !== m || m.seq !== seq || m.ctx !== ctx) return;
+      startVoice(m, path, buf, m.ctx.currentTime + 0.03, opts.offset, fadeIn);
+    }, err => { if (music === m && m.seq === seq) musicEnd(m, 'error', err); });
+  }
+
+  // Fade the music out over fadeS (it keeps sounding until then). release: also drop the decoded songs.
+  function musicStop(fadeS = 0.4, release = false) {
+    const m = music;
+    if (m) {
+      m.seq++;
+      fadeAll(m, fadeS);
+      musicEnd(m, 'stopped');
+    }
+    if (release) {
+      clearTimeout(releaseTimer);
+      releaseTimer = setTimeout(() => { if (!music) { mcache.clear(); minflight.clear(); } }, (fadeS + 0.2) * 1000);
+    }
+  }
+  // Immediate: the context is going away, or the pack is.
+  function musicKill(reason) {
+    const m = music;
+    mcache.clear(); minflight.clear();
+    if (!m) return;
+    for (const v of m.voices) { try { v.src.stop(); } catch (e) { /* ignore */ } try { v.gain.disconnect(); } catch (e) { /* ignore */ } }
+    m.voices = [];
+    musicEnd(m, reason);
+  }
+  // Resolves once stopped music has finished fading (so the Sound Check chime is heard on its own).
+  const musicQuiet = () => new Promise(r => setTimeout(r, Math.max(0, quietAt - performance.now())));
+
+  function musicInfo() {
+    const m = music, v = m && m.cur;
+    if (!m) return { playing: false, path: null, position: 0, duration: 0, decoded: mcache.size };
+    const pos = v ? Math.min(v.dur, Math.max(0, v.off + m.ctx.currentTime - v.at)) : 0;
+    return { playing: true, path: v ? v.path : null, position: pos, duration: v ? v.dur : 0, decoded: mcache.size };
+  }
+
   function info() {
     const s = navigator.audioSession;
     return {
@@ -318,6 +488,7 @@ const AudioEngine = (() => {
 
   return {
     on, arm, resume, play, fade, stop, chime, prefetch, setBytes, testDecode, info, setKeepAwake,
+    musicPlay, musicStop, musicPrefetch, musicInfo, musicQuiet, musicQueue: q => { queue = q; },
     touch: () => { session(); if (ctx) resume(); },   // for taps that should keep audio awake
     state: () => (ctx ? ctx.state : 'not armed'),
     trouble: () => trouble,
